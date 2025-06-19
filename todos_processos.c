@@ -7,13 +7,16 @@
 #include <string.h>
 #include <errno.h>
 #include <time.h>
+#include "gmv_proto.h"
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 // Constantes
 #define QTDE_FILHOS 4
 #define QTDE_ACESSOS 100
 #define QUANTUM_SEGUNDOS 1      
 #define RODADAS_TOTAIS 10
-#define EVER ;;
 
 //Variaveis globais
 char paginas_filhos[QTDE_FILHOS][QTDE_ACESSOS][6]; // Ex: "23 W\0"
@@ -26,6 +29,19 @@ static void imprimir_amostra();
 int main(void) {
     gerar_acessos_vetor();
     imprimir_amostra();
+
+    /* lança GMV como processo separado */
+    pid_t gmv_pid = fork();
+    if (gmv_pid == 0) {
+        execl("./gmv", "gmv", "NRU", (char *)NULL);
+        perror("execl gmv");
+        _exit(EXIT_FAILURE);
+    }
+
+    /* garante diretório de FIFOs */
+    mkdir("./FIFOs", 0777);
+    /* cria FIFO de requisições se ainda não existir */
+    mkfifo("./FIFOs/gmv_req", 0666);
 
     pid_t pids_filhos[QTDE_FILHOS];
 
@@ -77,38 +93,49 @@ int main(void) {
 
 // Rotina principal de cada filho
 static void rotina_filho(int id) {
+    /* Abre FIFO de requisições para escrita */
+    int fd_req = open("./FIFOs/gmv_req", O_WRONLY);
+    if (fd_req < 0) {
+        perror("open req fifo (filho)");
+        _exit(EXIT_FAILURE);
+    }
+    /* Cria e abre FIFO de resposta exclusivo */
+    char fifo_resp[64];
+    snprintf(fifo_resp, sizeof(fifo_resp), "./FIFOs/gmv_resp_%d", getpid());
+    mkfifo(fifo_resp, 0666);
+    int fd_resp = open(fifo_resp, O_RDWR); // RDWR evita bloqueio
+    if (fd_resp < 0) {
+        perror("open resp fifo (filho)");
+        _exit(EXIT_FAILURE);
+    }
+
     int i = 0;
 
-    for (EVER) {
+    while (i < QTDE_ACESSOS) {
+        const char *acesso = paginas_filhos[id][i];
+        int pagina = atoi(acesso);      // primeiros 2 chars
+        char operacao = acesso[3];      // 'R' ou 'W'
 
-        if (id == 0) {
-            printf("Filho P1 – PID %d trabalhando\n", getpid());
-            printf("Acesso: %s\n", paginas_filhos[id][i]);
-            // TODO: Verificar com o professor
-            // Como vamos chamar o GMV para ver se a página está disponível?
-            // FIFO?
-            // Memória compartilhada?
-            // Sinal?
-            i++;
-            sleep(1);
-        } else if (id == 1) {
-            printf("Filho P2 – PID %d trabalhando\n", getpid());
-            printf("Acesso: %s\n", paginas_filhos[id][i]);
-            i++;
-            sleep(1);
-        } else if (id == 2) {
-            printf("Filho P3 – PID %d trabalhando\n", getpid());
-            printf("Acesso: %s\n", paginas_filhos[id][i]);
-            i++;
-            sleep(1);
-        } else {
-            printf("Filho P4 – PID %d trabalhando\n", getpid());
-            printf("Acesso: %s\n", paginas_filhos[id][i]);
-            i++;
-            sleep(1);
+        printf("Filho P%d – PID %d trabalhando | Acesso %s\n", id+1, getpid(), acesso);
+        fflush(stdout);
+
+        /* monta requisição e envia ao GMV */
+        req_t req = { .pid = getpid(), .pagina = (uint8_t)pagina, .operacao = operacao };
+        write(fd_req, &req, sizeof(req));
+
+        /* lê resposta */
+        resp_t resp;
+        if (read(fd_resp, &resp, sizeof(resp)) == sizeof(resp)) {
+            printf("    -> quadro %d (page_fault=%d)\n", resp.quadro, resp.page_fault);
         }
         fflush(stdout);
+
+        ++i;
+        sleep(1);
     }
+
+    close(fd_req);
+    close(fd_resp);
 }
 
 static void gerar_acessos_vetor() {
