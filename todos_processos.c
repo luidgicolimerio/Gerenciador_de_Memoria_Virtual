@@ -16,7 +16,7 @@
 #define QTDE_FILHOS 4
 #define QTDE_ACESSOS 100
 #define QUANTUM_SEGUNDOS 1      
-#define RODADAS_TOTAIS 10
+#define RODADAS_TOTAIS 50
 
 //Variaveis globais
 char paginas_filhos[QTDE_FILHOS][QTDE_ACESSOS][6]; // Ex: "23 W\0"
@@ -29,14 +29,6 @@ static void imprimir_amostra();
 int main(void) {
     gerar_acessos_vetor();
     imprimir_amostra();
-
-    /* lança GMV como processo separado */
-    pid_t gmv_pid = fork();
-    if (gmv_pid == 0) {
-        execl("./gmv", "gmv", "NRU", (char *)NULL);
-        perror("execl gmv");
-        _exit(EXIT_FAILURE);
-    }
 
     /* garante diretório de FIFOs */
     mkdir("./FIFOs", 0777);
