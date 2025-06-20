@@ -23,6 +23,7 @@
 //Variaveis globais
 char paginas_filhos[QTDE_FILHOS][QTDE_ACESSOS][6]; // Ex: "23 W\0"
 int *contador_compartilhado = NULL;
+int *contador_pag_sujas_shared = NULL; // novo ponteiro para páginas sujas
 
 // Protótipos
 static void rotina_filho(int id);
@@ -40,6 +41,13 @@ int main(void) {
     if (contador_compartilhado == (void *)-1) { perror("shmat"); exit(1); }
     *contador_compartilhado = 0;          /* zera antes dos forks */
     
+    /* anexa ao contador de páginas sujas criado pelo GMV */
+    key_t shm_key_dp = ftok("/tmp", 'D');
+    int shmid_dp = shmget(shm_key_dp, sizeof(int), 0666);
+    if (shmid_dp == -1) { perror("shmget dirty"); exit(1); }
+    contador_pag_sujas_shared = shmat(shmid_dp, NULL, 0);
+    if (contador_pag_sujas_shared == (void *)-1) { perror("shmat dirty"); exit(1); }
+
     /* garante diretório de FIFOs */
     mkdir("./FIFOs", 0777);
     /* cria FIFO de requisições se ainda não existir */
@@ -89,13 +97,14 @@ int main(void) {
         waitpid(pids_filhos[i], NULL, 0);
     }
     contador_page_faults = *contador_compartilhado;
-    printf("Contador de páginas sujas: %d\n", contador_paginas_sujas);
+    printf("Contador de páginas sujas: %d\n", *contador_pag_sujas_shared);
     printf("Contador de page faults: %d\n", contador_page_faults);
     puts("TodosProcessos finalizado.");
 
     // Remove o segmento de memória compartilhada
     shmdt(contador_compartilhado);      /* desanexa */
     shmctl(shmid, IPC_RMID, NULL);      /* remove o segmento */
+    shmdt(contador_pag_sujas_shared);
     return 0;
 }
 

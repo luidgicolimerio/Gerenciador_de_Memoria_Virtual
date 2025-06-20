@@ -7,6 +7,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <time.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
 
 #define NUM_QUADROS QUADROS_PF
 #define BIT_R BIT_REFERENCIADA
@@ -22,6 +24,8 @@ typedef struct {
 
 static quadro_t memoria_fisica[NUM_QUADROS];
 static uint64_t tempo_global = 0;
+static int *contador_paginas_sujas_ptr = NULL;   // ponteiro para contador em memória compartilhada
+#define INC_PAG_SUJAS() do { if (contador_paginas_sujas_ptr) (*(contador_paginas_sujas_ptr))++; } while(0)
 
 
 /***************** Protótipos dos algoritmos de substituição ****************/
@@ -58,40 +62,41 @@ static int select_NRU(tabela_pagina_t *tabelas, int qtd_processos) {
     }
 
     /* devolve o primeiro candidato de menor classe disponível */
-    for (int c = 0; c < 4; c++)
-        if (candidatos[c] != -1)
+    for (int c = 0; c < 4; c++){
+        if (candidatos[c] != -1){
             return candidatos[c];
-
+        }
+    }
     /* fallback improvável */
     printf("NRU: fallback improvável\n");
     return rand_quadro();
 }
 static int select_2nCh(tabela_pagina_t *tabelas, int qtd_processos) {
-    // TODO: Verificar se está de acordo com o slide
-    // TODO: adicionar contador de paginas sujas
+    // Resolvido - visto
     static int ponteiro = 0;
 
     for (int tentativas = 0; tentativas < NUM_QUADROS * 2; tentativas++) {
         int idx = ponteiro % NUM_QUADROS;
         quadro_t *q = &memoria_fisica[idx];
 
-        if (!q->ocupado) return idx;
+        if (!q->ocupado) return idx; // Se o quadro atual não estiver ocupado, retorna o índice do quadro
 
         entrada_tp_t *e = &tabelas[q->processo_id].entradas[q->pagina_virtual];
 
-        if ((e->flags & BIT_R) == 0)
+        if ((e->flags & BIT_R) == 0){ // Se o bit R não estiver setado, retorna o índice do quadro
             return idx;
-        else
-            e->flags &= ~BIT_R; // dá segunda chance
+        } else {
+            e->flags &= ~BIT_R; // Se o bit R estiver setado, limpa o bit R
+        }
 
         ponteiro = (ponteiro + 1) % NUM_QUADROS;
     }
-
-    return ponteiro % NUM_QUADROS;
+    return ponteiro % NUM_QUADROS; 
 }
 static int select_LRU(tabela_pagina_t *tabelas, int qtd_processos) {
-    // TODO: Verificar se está de acordo com o slide
-    // TODO: adicionar contador de paginas sujas
+    // Resolvido - visto
+    // Na teoria faz o que está no slide
+    // TODO: testar printando o tempo global e o ultimo acesso de cada quadro para validar
 
     uint64_t menor_tempo = UINT64_MAX;
     int indice_vitima = -1;
@@ -112,7 +117,6 @@ static int select_LRU(tabela_pagina_t *tabelas, int qtd_processos) {
 }
 static int select_WS(tabela_pagina_t *tabelas, int qtd_processos, int k) {
     // TODO: Verificar se está de acordo com o slide
-    // TODO: adicionar contador de paginas sujas
     uint64_t limite = tempo_global - k;
     int indice_vitima = -1;
     uint64_t mais_antigo = UINT64_MAX;
@@ -158,6 +162,16 @@ int main(int argc, char *argv[]) {
     const char *algoritmo = argv[1];
     int k = (argc >= 3) ? atoi(argv[2]) : 3;
     srand(time(NULL));
+
+    /* configura memória compartilhada para contador de páginas sujas */
+    key_t shm_key_dp = ftok("/tmp", 'D');
+    if (shm_key_dp == -1) { perror("ftok"); return EXIT_FAILURE; }
+    int shm_id_dp = shmget(shm_key_dp, sizeof(int), IPC_CREAT | 0666);
+    if (shm_id_dp == -1) { perror("shmget"); return EXIT_FAILURE; }
+    contador_paginas_sujas_ptr = shmat(shm_id_dp, NULL, 0);
+    if (contador_paginas_sujas_ptr == (void *)-1) { perror("shmat"); return EXIT_FAILURE; }
+    *contador_paginas_sujas_ptr = 0;
+
 
     /* garante diretório de FIFOs */
     mkdir(FIFO_DIR, 0777);
@@ -216,7 +230,7 @@ int main(int argc, char *argv[]) {
                                               .entradas[memoria_fisica[quadro].pagina_virtual];
                 vict->flags &= ~BIT_PRESENCA;
                 if (vict->flags & BIT_MODIFICADA){
-                    contador_paginas_sujas++;
+                    INC_PAG_SUJAS();
                 }
             }
             memoria_fisica[quadro].ocupado = true;
