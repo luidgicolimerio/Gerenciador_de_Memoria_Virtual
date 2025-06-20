@@ -23,7 +23,6 @@ typedef struct {
 static quadro_t memoria_fisica[NUM_QUADROS];
 static uint64_t tempo_global = 0;
 
-// (Constantes e estruturas agora estão em gmv_proto.h)
 
 /***************** Protótipos dos algoritmos de substituição ****************/
 // Cada função deve devolver o índice do quadro escolhido para substituição
@@ -46,7 +45,7 @@ static int select_NRU(tabela_pagina_t *tabelas, int qtd_processos) {
 
     /* Classifica quadros ocupados nas 4 classes NRU */
     for (int i = 0; i < NUM_QUADROS; i++) {
-        quadro_t *q = &memoria_fisica[i];
+        quadro_t *q = &memoria_fisica[i]; // q de quadro da memória RAM
         entrada_tp_t *e = &tabelas[q->processo_id].entradas[q->pagina_virtual];
         uint8_t f = e->flags;
         int classe;
@@ -69,6 +68,7 @@ static int select_NRU(tabela_pagina_t *tabelas, int qtd_processos) {
 }
 static int select_2nCh(tabela_pagina_t *tabelas, int qtd_processos) {
     // TODO: Verificar se está de acordo com o slide
+    // TODO: adicionar contador de paginas sujas
     static int ponteiro = 0;
 
     for (int tentativas = 0; tentativas < NUM_QUADROS * 2; tentativas++) {
@@ -91,6 +91,8 @@ static int select_2nCh(tabela_pagina_t *tabelas, int qtd_processos) {
 }
 static int select_LRU(tabela_pagina_t *tabelas, int qtd_processos) {
     // TODO: Verificar se está de acordo com o slide
+    // TODO: adicionar contador de paginas sujas
+
     uint64_t menor_tempo = UINT64_MAX;
     int indice_vitima = -1;
 
@@ -110,6 +112,7 @@ static int select_LRU(tabela_pagina_t *tabelas, int qtd_processos) {
 }
 static int select_WS(tabela_pagina_t *tabelas, int qtd_processos, int k) {
     // TODO: Verificar se está de acordo com o slide
+    // TODO: adicionar contador de paginas sujas
     uint64_t limite = tempo_global - k;
     int indice_vitima = -1;
     uint64_t mais_antigo = UINT64_MAX;
@@ -212,6 +215,9 @@ int main(int argc, char *argv[]) {
                 entrada_tp_t *vict = &tabelas[memoria_fisica[quadro].processo_id]
                                               .entradas[memoria_fisica[quadro].pagina_virtual];
                 vict->flags &= ~BIT_PRESENCA;
+                if (vict->flags & BIT_MODIFICADA){
+                    contador_paginas_sujas++;
+                }
             }
             memoria_fisica[quadro].ocupado = true;
             memoria_fisica[quadro].processo_id = idx;

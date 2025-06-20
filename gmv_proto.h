@@ -27,6 +27,10 @@ typedef struct {
     entrada_tp_t entradas[ENTRADAS_TP];
 } tabela_pagina_t;
 
+/**************** Variaveis Globais ********************/
+int contador_paginas_sujas = 0;
+int contador_page_faults = 0;
+
 /**************** Protocolo FIFO ********************/
 /* Pedido que um processo envia ao GMV */
 typedef struct {

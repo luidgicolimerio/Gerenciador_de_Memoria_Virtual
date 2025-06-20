@@ -11,15 +11,18 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
 
 // Constantes
 #define QTDE_FILHOS 4
 #define QTDE_ACESSOS 100
 #define QUANTUM_SEGUNDOS 1      
-#define RODADAS_TOTAIS 50
+#define RODADAS_TOTAIS 100
 
 //Variaveis globais
 char paginas_filhos[QTDE_FILHOS][QTDE_ACESSOS][6]; // Ex: "23 W\0"
+int *contador_compartilhado = NULL;
 
 // Protótipos
 static void rotina_filho(int id);
@@ -30,6 +33,13 @@ int main(void) {
     gerar_acessos_vetor();
     imprimir_amostra();
 
+    // Cria o segmento de memória compartilhada para o contador de page faults
+    int shmid = shmget(IPC_PRIVATE, sizeof(int),IPC_CREAT | S_IRUSR | S_IWUSR);
+    if (shmid == -1) { perror("shmget"); exit(1); }
+    contador_compartilhado = shmat(shmid, NULL, 0);
+    if (contador_compartilhado == (void *)-1) { perror("shmat"); exit(1); }
+    *contador_compartilhado = 0;          /* zera antes dos forks */
+    
     /* garante diretório de FIFOs */
     mkdir("./FIFOs", 0777);
     /* cria FIFO de requisições se ainda não existir */
@@ -78,8 +88,14 @@ int main(void) {
         kill(pids_filhos[i], SIGKILL);
         waitpid(pids_filhos[i], NULL, 0);
     }
-
+    contador_page_faults = *contador_compartilhado;
+    printf("Contador de páginas sujas: %d\n", contador_paginas_sujas);
+    printf("Contador de page faults: %d\n", contador_page_faults);
     puts("TodosProcessos finalizado.");
+
+    // Remove o segmento de memória compartilhada
+    shmdt(contador_compartilhado);      /* desanexa */
+    shmctl(shmid, IPC_RMID, NULL);      /* remove o segmento */
     return 0;
 }
 
@@ -102,7 +118,6 @@ static void rotina_filho(int id) {
     }
 
     int i = 0;
-
     while (i < QTDE_ACESSOS) {
         const char *acesso = paginas_filhos[id][i];
         int pagina = atoi(acesso);      // primeiros 2 chars
@@ -120,6 +135,10 @@ static void rotina_filho(int id) {
         if (read(fd_resp, &resp, sizeof(resp)) == sizeof(resp)) {
             printf("    -> quadro %d (page_fault=%d)\n", resp.quadro, resp.page_fault);
         }
+        
+        if (resp.page_fault == 1) {
+            __sync_fetch_and_add(contador_compartilhado, 1);
+        }
         fflush(stdout);
 
         ++i;
@@ -128,6 +147,7 @@ static void rotina_filho(int id) {
 
     close(fd_req);
     close(fd_resp);
+    shmdt(contador_compartilhado);
 }
 
 static void gerar_acessos_vetor() {
