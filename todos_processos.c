@@ -18,7 +18,8 @@
 #define QTDE_FILHOS 4
 #define QTDE_ACESSOS 100
 #define QUANTUM_SEGUNDOS 1      
-#define RODADAS_TOTAIS 100
+// Número de rodadas será recebido por parâmetro de linha de comando
+static int RODADAS_TOTAIS = 100;
 
 //Variaveis globais
 char paginas_filhos[QTDE_FILHOS][QTDE_ACESSOS][6]; // Ex: "23 W\0"
@@ -30,7 +31,18 @@ static void rotina_filho(int id);
 static void gerar_acessos_vetor();
 static void imprimir_amostra();
 
-int main(void) {
+int main(int argc, char *argv[]) {
+    /* Parametros: argv[1] = rodadas, opcional */
+    const char *algoritmo_nome = "(desconhecido)";
+
+    if (argc >= 2) {
+        RODADAS_TOTAIS = atoi(argv[1]);
+        if (RODADAS_TOTAIS <= 0) RODADAS_TOTAIS = 1;
+    }
+    if (argc >= 3) {
+        algoritmo_nome = argv[2]; // apenas para relatorio
+    }
+
     gerar_acessos_vetor();
     imprimir_amostra();
 
@@ -97,8 +109,12 @@ int main(void) {
         waitpid(pids_filhos[i], NULL, 0);
     }
     contador_page_faults = *contador_compartilhado;
-    printf("Contador de páginas sujas: %d\n", *contador_pag_sujas_shared);
-    printf("Contador de page faults: %d\n", contador_page_faults);
+    printf("\n==== RELATÓRIO FINAL ====" "\n");
+    printf("Algoritmo de Substituição: %s\n", algoritmo_nome);
+    printf("Rodadas executadas: %d\n", RODADAS_TOTAIS);
+    printf("Page faults gerados: %d\n", contador_page_faults);
+    printf("Páginas sujas gravadas em swap: %d\n", *contador_pag_sujas_shared);
+    puts("========================\n");
     puts("TodosProcessos finalizado.");
 
     // Remove o segmento de memória compartilhada
@@ -147,6 +163,8 @@ static void rotina_filho(int id) {
         
         if (resp.page_fault == 1) {
             __sync_fetch_and_add(contador_compartilhado, 1);
+
+            usleep(200000); // 200ms para simular o tempo de execução do GMV
         }
         fflush(stdout);
 
