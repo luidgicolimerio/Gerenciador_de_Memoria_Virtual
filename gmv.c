@@ -32,8 +32,8 @@ static int *contador_paginas_sujas_ptr = NULL;   // ponteiro para contador em me
 // Cada função deve devolver o índice do quadro escolhido para substituição
 static int select_NRU(tabela_pagina_t *tabelas, int qtd_processos);
 static int select_2nCh(tabela_pagina_t *tabelas, int qtd_processos);
-static int select_LRU(tabela_pagina_t *tabelas, int qtd_processos);
-static int select_WS(tabela_pagina_t *tabelas, int qtd_processos, int k /* janela de working set */);
+static int select_LRU(tabela_pagina_t *tabelas, int qtd_processos, int proc_idx);
+static int select_WS(tabela_pagina_t *tabelas, int qtd_processos, int k, int proc_idx);
 
 /********************* Implementações simplificadas *************************/
 static int rand_quadro(void) { return rand() % NUM_QUADROS; }
@@ -93,27 +93,50 @@ static int select_2nCh(tabela_pagina_t *tabelas, int qtd_processos) {
     }
     return ponteiro % NUM_QUADROS; 
 }
-static int select_LRU(tabela_pagina_t *tabelas, int qtd_processos) {
-    // Resolvido - visto
+static int select_LRU(tabela_pagina_t *tabelas, int qtd_processos, int proc_idx) {
+    // LRU com substituição local: prioriza quadros do próprio processo.
 
-    uint64_t menor_tempo = UINT64_MAX;
-    int indice_vitima = -1;
+    uint64_t menor_tempo_local = UINT64_MAX;
+    int indice_vitima_local = -1;
 
-    for (int i = 0; i < NUM_QUADROS; i++) {
-        if (!memoria_fisica[i].ocupado) return i;
+    /* Primeiro: procura quadro livre; se encontrar, devolve imediatamente */
+    for (int i = 0; i < NUM_QUADROS; ++i) {
+        if (!memoria_fisica[i].ocupado)
+            return i;
+    }
 
+    /* Passo 1: procura LRU entre quadros pertencentes ao processo */
+    for (int i = 0; i < NUM_QUADROS; ++i) {
         quadro_t *q = &memoria_fisica[i];
-        entrada_tp_t *e = &tabelas[q->processo_id].entradas[q->pagina_virtual];
+        if (!q->ocupado || q->processo_id != proc_idx)
+            continue; // ignora quadros de outros processos
 
-        if (e->ultimo_acesso < menor_tempo) {
-            menor_tempo = e->ultimo_acesso;
-            indice_vitima = i;
+        entrada_tp_t *e = &tabelas[q->processo_id].entradas[q->pagina_virtual];
+        if (e->ultimo_acesso < menor_tempo_local) {
+            menor_tempo_local = e->ultimo_acesso;
+            indice_vitima_local = i;
         }
     }
 
-    return indice_vitima;
+    if (indice_vitima_local != -1)
+        return indice_vitima_local;
+
+    /* Passo 2: processo não possui quadros (ou algum erro); faz fallback global */
+    uint64_t menor_tempo_global = UINT64_MAX;
+    int indice_vitima_global = -1;
+    for (int i = 0; i < NUM_QUADROS; ++i) {
+        quadro_t *q = &memoria_fisica[i];
+        if (!q->ocupado)
+            continue;
+        entrada_tp_t *e = &tabelas[q->processo_id].entradas[q->pagina_virtual];
+        if (e->ultimo_acesso < menor_tempo_global) {
+            menor_tempo_global = e->ultimo_acesso;
+            indice_vitima_global = i;
+        }
+    }
+    return indice_vitima_global; // nunca deve ser -1 porque não há quadros livres nessa etapa
 }
-static int select_WS(tabela_pagina_t *tabelas, int qtd_processos, int k) {
+static int select_WS(tabela_pagina_t *tabelas, int qtd_processos, int k, int proc_idx) {
     // Implementação com ponteiro circular para distribuir as vítimas.
     static int ponteiro = 0;
 
@@ -127,15 +150,21 @@ static int select_WS(tabela_pagina_t *tabelas, int qtd_processos, int k) {
         int i = (ponteiro + passo) % NUM_QUADROS;
 
         if (!memoria_fisica[i].ocupado) {
+            // quadro livre pode ser usado por qualquer processo
             ponteiro = (i + 1) % NUM_QUADROS;
-            return i; // quadro livre encontrado
+            return i;
+        }
+
+        // Apenas considera quadros pertencentes ao mesmo processo (substituição local)
+        if (memoria_fisica[i].processo_id != proc_idx) {
+            continue;
         }
 
         quadro_t *q = &memoria_fisica[i];
         entrada_tp_t *e = &tabelas[q->processo_id].entradas[q->pagina_virtual];
 
         if (e->ultimo_acesso < limite && indice_fora_ws == -1) {
-            indice_fora_ws = i; // marca o primeiro fora do WS, mas continua a varredura para completar uma volta
+            indice_fora_ws = i; // primeiro quadro desse processo fora do WS
         }
 
         if (e->ultimo_acesso < mais_antigo) {
@@ -146,6 +175,13 @@ static int select_WS(tabela_pagina_t *tabelas, int qtd_processos, int k) {
 
     // Atualiza ponteiro para próximo quadro após a vítima escolhida
     int escolhido = (indice_fora_ws != -1) ? indice_fora_ws : indice_mais_antigo;
+
+    if (escolhido == -1) {
+        // Situação inesperada: processo não tem quadros próprios e não há livres.
+        // Faz fallback para escolha global via ponteiro.
+        escolhido = ponteiro;
+    }
+
     ponteiro = (escolhido + 1) % NUM_QUADROS;
     return escolhido;
 }
@@ -235,9 +271,9 @@ int main(int argc, char *argv[]) {
             else if (strcmp(algoritmo, "2nCH") == 0)
                 quadro = select_2nCh(tabelas, QTDE_FILHOS);
             else if (strcmp(algoritmo, "LRU") == 0)
-                quadro = select_LRU(tabelas, QTDE_FILHOS);
+                quadro = select_LRU(tabelas, QTDE_FILHOS, idx);
             else
-                quadro = select_WS(tabelas, QTDE_FILHOS, k);
+                quadro = select_WS(tabelas, QTDE_FILHOS, k, idx);
             /* se o quadro já estiver ocupado, limpa mapeamento antigo */
             if (memoria_fisica[quadro].ocupado) {
                 entrada_tp_t *vict = &tabelas[memoria_fisica[quadro].processo_id]
