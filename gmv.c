@@ -95,8 +95,6 @@ static int select_2nCh(tabela_pagina_t *tabelas, int qtd_processos) {
 }
 static int select_LRU(tabela_pagina_t *tabelas, int qtd_processos) {
     // Resolvido - visto
-    // Na teoria faz o que está no slide
-    // TODO: testar printando o tempo global e o ultimo acesso de cada quadro para validar
 
     uint64_t menor_tempo = UINT64_MAX;
     int indice_vitima = -1;
@@ -116,24 +114,40 @@ static int select_LRU(tabela_pagina_t *tabelas, int qtd_processos) {
     return indice_vitima;
 }
 static int select_WS(tabela_pagina_t *tabelas, int qtd_processos, int k) {
-    // TODO: Verificar se está de acordo com o slide
-    uint64_t limite = tempo_global - k;
-    int indice_vitima = -1;
+    // Implementação com ponteiro circular para distribuir as vítimas.
+    static int ponteiro = 0;
+
+    uint64_t limite = tempo_global - k; // fronteira da janela k
+
+    int indice_fora_ws = -1;     // primeiro quadro fora do WS encontrado na varredura
+    int indice_mais_antigo = -1; // fallback LRU caso todos estejam no WS
     uint64_t mais_antigo = UINT64_MAX;
 
-    for (int i = 0; i < NUM_QUADROS; i++) {
-        if (!memoria_fisica[i].ocupado) return i;
+    for (int passo = 0; passo < NUM_QUADROS; ++passo) {
+        int i = (ponteiro + passo) % NUM_QUADROS;
+
+        if (!memoria_fisica[i].ocupado) {
+            ponteiro = (i + 1) % NUM_QUADROS;
+            return i; // quadro livre encontrado
+        }
 
         quadro_t *q = &memoria_fisica[i];
         entrada_tp_t *e = &tabelas[q->processo_id].entradas[q->pagina_virtual];
 
+        if (e->ultimo_acesso < limite && indice_fora_ws == -1) {
+            indice_fora_ws = i; // marca o primeiro fora do WS, mas continua a varredura para completar uma volta
+        }
+
         if (e->ultimo_acesso < mais_antigo) {
             mais_antigo = e->ultimo_acesso;
-            indice_vitima = i;
+            indice_mais_antigo = i;
         }
     }
 
-    return indice_vitima;
+    // Atualiza ponteiro para próximo quadro após a vítima escolhida
+    int escolhido = (indice_fora_ws != -1) ? indice_fora_ws : indice_mais_antigo;
+    ponteiro = (escolhido + 1) % NUM_QUADROS;
+    return escolhido;
 }
 
 /********************* Servidor GMV via FIFO *********************************/
