@@ -30,6 +30,9 @@ int *contador_pag_sujas_shared = NULL; // novo ponteiro para páginas sujas
 static void rotina_filho(int id);
 static void gerar_acessos_vetor();
 static void imprimir_amostra();
+/* protótipo para permitir chamada antes da definição */
+static void exibir_relatorio_final(const char *algoritmo, int k_param, int rodadas,
+                                   int total_pf, int dirty_pages);
 
 int main(int argc, char *argv[]) {
     /* Parametros: argv[1] = rodadas, opcional */
@@ -89,7 +92,7 @@ int main(int argc, char *argv[]) {
     }
     printf("Todos os filhos foram criados e parados\n");
     // Loop de escalonamento Round-Robin
-    for (int rodada = 0; rodada < RODADAS_TOTAIS; rodada++) {
+    for (int rodada = 0; rodada < RODADAS_TOTAIS*QTDE_FILHOS; rodada++) {
         int indice = rodada % QTDE_FILHOS;
         // Continua o filho selecionado
         if (kill(pids_filhos[indice], SIGCONT) == -1) {
@@ -109,13 +112,21 @@ int main(int argc, char *argv[]) {
         waitpid(pids_filhos[i], NULL, 0);
     }
     contador_page_faults = *contador_compartilhado;
-    printf("\n==== RELATÓRIO FINAL ====" "\n");
-    printf("Algoritmo de Substituição: %s\n", algoritmo_nome);
-    printf("Rodadas executadas: %d\n", RODADAS_TOTAIS);
-    printf("Page faults gerados: %d\n", contador_page_faults);
-    printf("Páginas sujas gravadas em swap: %d\n", *contador_pag_sujas_shared);
-    puts("========================\n");
-    puts("TodosProcessos finalizado.");
+
+    /* Solicita ao GMV que grave as tabelas finais e finalize */
+    FILE *pidf = fopen("gmv.pid", "r");
+    if (pidf) {
+        pid_t gpid; if (fscanf(pidf, "%d", &gpid) == 1) {
+            kill(gpid, SIGUSR1);
+            sleep(1); /* aguarda escrita de tables.txt */
+        }
+        fclose(pidf);
+    }
+
+    exibir_relatorio_final(algoritmo_nome, 0 /*k param placeholder*/, RODADAS_TOTAIS,
+                           contador_page_faults, *contador_pag_sujas_shared);
+
+    puts("\nTodosProcessos finalizado.");
 
     // Remove o segmento de memória compartilhada
     shmdt(contador_compartilhado);      /* desanexa */
@@ -196,5 +207,33 @@ static void imprimir_amostra() {
             printf("  %s\n", paginas_filhos[i][j]);
         }
         printf("...\n");
+    }
+}
+
+/* Estrutura de utilidade para imprimir relatório final */
+static void exibir_relatorio_final(const char *algoritmo, int k_param, int rodadas,
+                                   int total_pf, int dirty_pages) {
+    printf("\n======== Estatísticas =========\n");
+    printf("Algoritmo.................: %s", algoritmo);
+    if (strcmp(algoritmo, "WS") == 0) {
+        printf(" (k=%d)", k_param);
+    }
+    printf("\nRodadas executadas........: %d\n", rodadas);
+    printf("Page-faults..............: %d\n", total_pf);
+    printf("Páginas sujas gravadas...: %d\n", dirty_pages);
+
+#if 0
+    /* Caso deseje exibir a sequência completa de page-faults, implemente aqui */
+#endif
+
+    /* Tabelas de página finais */
+    FILE *tlog = fopen("tables.txt", "r");
+    if (tlog) {
+        char buf[256];
+        printf("\n======== Tabelas de Página =========\n");
+        while (fgets(buf, sizeof(buf), tlog)) {
+            fputs(buf, stdout);
+        }
+        fclose(tlog);
     }
 }

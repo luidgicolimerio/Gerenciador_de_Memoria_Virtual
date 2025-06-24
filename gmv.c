@@ -9,12 +9,51 @@
 #include <time.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
+#include <signal.h>
 
 #define NUM_QUADROS QUADROS_PF
 #define BIT_R BIT_REFERENCIADA
 
 /* intervalo para zerar bits R (em acessos) */
 #define REF_CLEAR_INTERVAL 20
+
+#define LOG_PF_FILE "pf_log.txt"
+static FILE *pf_log_fp = NULL;
+static tabela_pagina_t *g_tables_ptr = NULL;
+
+static void close_log_file(void) {
+    if (pf_log_fp) fclose(pf_log_fp);
+}
+
+/* Grava o estado final das tabelas de páginas */
+static void dump_tables_to_file(void) {
+    if (!g_tables_ptr) return;
+    FILE *tf = fopen("tables.txt", "w");
+    if (!tf) return;
+    for (int p = 0; p < QTDE_FILHOS; ++p) {
+        fprintf(tf, "Processo P%d\n", p + 1);
+        fprintf(tf, "VP | P M R | Frame | LastRef\n");
+        for (int pg = 0; pg < ENTRADAS_TP; ++pg) {
+            entrada_tp_t *e = &g_tables_ptr[p].entradas[pg];
+            int Pbit = (e->flags & BIT_PRESENCA) ? 1 : 0;
+            int Mbit = (e->flags & BIT_MODIFICADA) ? 1 : 0;
+            int Rbit = (e->flags & BIT_REFERENCIADA) ? 1 : 0;
+            fprintf(tf, "%02d | %d %d %d |  %5d | %llu\n",
+                    pg, Pbit, Mbit, Rbit,
+                    e->quadro_fisico,
+                    (unsigned long long)e->ultimo_acesso);
+        }
+        fprintf(tf, "\n");
+    }
+    fclose(tf);
+}
+
+static void sigusr1_handler(int signo) {
+    (void)signo;
+    dump_tables_to_file();
+    if (pf_log_fp) fflush(pf_log_fp);
+    exit(0);
+}
 
 typedef struct {
     bool ocupado;
@@ -238,6 +277,25 @@ int main(int argc, char *argv[]) {
 
     printf("GMV iniciado usando algoritmo %s\n", algoritmo);
 
+    /* abre log de page faults */
+    pf_log_fp = fopen(LOG_PF_FILE, "w");
+    if (pf_log_fp) {
+        fprintf(pf_log_fp, "tempo Px Py pagX pagY quadro dirty\n");
+        fflush(pf_log_fp);
+    }
+
+    atexit(close_log_file);
+
+    /* grava arquivo com PID para que controlador possa sinalizar */
+    FILE *pidf = fopen("gmv.pid", "w");
+    if (pidf) { fprintf(pidf, "%d\n", getpid()); fclose(pidf);}  
+
+    /* registra handler para SIGUSR1 */
+    signal(SIGUSR1, sigusr1_handler);
+
+    /* mantém ponteiro global para tabelas */
+    g_tables_ptr = tabelas;
+
     while (1) {
         req_t req;
         ssize_t r = read(fd_req, &req, sizeof(req));
@@ -275,12 +333,19 @@ int main(int argc, char *argv[]) {
             else
                 quadro = select_WS(tabelas, QTDE_FILHOS, k, idx);
             /* se o quadro já estiver ocupado, limpa mapeamento antigo */
+            int py_log = -1;
+            uint8_t pagy_log = 0;
+            int dirty_log = 0;
+
             if (memoria_fisica[quadro].ocupado) {
                 entrada_tp_t *vict = &tabelas[memoria_fisica[quadro].processo_id]
                                               .entradas[memoria_fisica[quadro].pagina_virtual];
+                py_log = memoria_fisica[quadro].processo_id;
+                pagy_log = memoria_fisica[quadro].pagina_virtual;
                 vict->flags &= ~BIT_PRESENCA;
                 if (vict->flags & BIT_MODIFICADA){
                     INC_PAG_SUJAS();
+                    dirty_log = 1;
                 }
             }
             memoria_fisica[quadro].ocupado = true;
@@ -289,6 +354,29 @@ int main(int argc, char *argv[]) {
             entry->quadro_fisico = quadro;
             entry->flags = BIT_PRESENCA;
             page_fault = 1;
+
+            /* grava no arquivo de log */
+            if (pf_log_fp) {
+                fprintf(pf_log_fp, "%llu %d %d %u %u %d %d\n",
+                        (unsigned long long)tempo_global,
+                        idx,
+                        py_log,
+                        req.pagina,
+                        pagy_log,
+                        quadro,
+                        dirty_log);
+                fflush(pf_log_fp);
+            }
+
+            /* imprime na saída padrão em tempo real */
+            if (py_log == -1)
+                printf("Page-fault: Processo P%d causou falha (quadro livre %d)\n", idx + 1, quadro);
+            else
+                printf("Page-fault: Processo P%d causou falha, Processo P%d perdeu quadro %d%s\n",
+                       idx + 1,
+                       py_log + 1,
+                       quadro,
+                       dirty_log ? " [dirty]" : "");
         }
         entry->flags |= BIT_REFERENCIADA;
         if (req.operacao == 'W') entry->flags |= BIT_MODIFICADA;

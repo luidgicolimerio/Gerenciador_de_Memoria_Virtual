@@ -20,7 +20,6 @@ typedef struct {
     uint32_t quadro_fisico;   // índice do quadro físico que contém a página
     uint8_t  flags;           // combinação de BIT_*
     uint64_t ultimo_acesso;   // timestamp ou contador
-    uint32_t idade;           // usado por algoritmos de aging
 } entrada_tp_t;
 
 typedef struct {
