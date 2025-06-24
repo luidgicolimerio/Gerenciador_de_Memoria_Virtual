@@ -33,6 +33,7 @@ static void imprimir_amostra();
 /* protótipo para permitir chamada antes da definição */
 static void exibir_relatorio_final(const char *algoritmo, int k_param, int rodadas,
                                    int total_pf, int dirty_pages);
+static void salvar_acessos_arquivos();
 
 int main(int argc, char *argv[]) {
     /* Parametros: argv[1] = rodadas, opcional */
@@ -47,6 +48,7 @@ int main(int argc, char *argv[]) {
     }
 
     gerar_acessos_vetor();
+    salvar_acessos_arquivos();
     imprimir_amostra();
 
     // Cria o segmento de memória compartilhada para o contador de page faults
@@ -153,13 +155,19 @@ static void rotina_filho(int id) {
         _exit(EXIT_FAILURE);
     }
 
-    int i = 0;
-    while (i < QTDE_ACESSOS) {
-        const char *acesso = paginas_filhos[id][i];
-        int pagina = atoi(acesso);      // primeiros 2 chars
-        char operacao = acesso[3];      // 'R' ou 'W'
+    /* abre arquivo com sequencia de acessos do processo */
+    char nome_arq[32];
+    snprintf(nome_arq, sizeof(nome_arq), "acessos_P%d", id + 1);
+    FILE *fp_acessos = fopen(nome_arq, "r");
+    if (!fp_acessos) { perror("open acessos file"); _exit(EXIT_FAILURE);}    
 
-        printf("Filho P%d – PID %d trabalhando | Acesso %s\n", id+1, getpid(), acesso);
+    char linha[16];
+    int i = 0;
+    while (i < QTDE_ACESSOS && fgets(linha, sizeof(linha), fp_acessos)) {
+        int pagina; char operacao;
+        if (sscanf(linha, "%d %c", &pagina, &operacao) != 2) continue;
+
+        printf("Filho P%d – PID %d trabalhando | Acesso %s", id+1, getpid(), linha);
         fflush(stdout);
 
         /* monta requisição e envia ao GMV */
@@ -183,6 +191,7 @@ static void rotina_filho(int id) {
         sleep(1);
     }
 
+    fclose(fp_acessos);
     close(fd_req);
     close(fd_resp);
     shmdt(contador_compartilhado);
@@ -235,5 +244,19 @@ static void exibir_relatorio_final(const char *algoritmo, int k_param, int rodad
             fputs(buf, stdout);
         }
         fclose(tlog);
+    }
+}
+
+/* grava arquivos acessos_PX */
+static void salvar_acessos_arquivos() {
+    for (int i = 0; i < QTDE_FILHOS; ++i) {
+        char nome[32];
+        snprintf(nome, sizeof(nome), "acessos_P%d", i + 1);
+        FILE *f = fopen(nome, "w");
+        if (!f) { perror("fopen acessos"); continue; }
+        for (int j = 0; j < QTDE_ACESSOS; ++j) {
+            fprintf(f, "%s\n", paginas_filhos[i][j]);
+        }
+        fclose(f);
     }
 }
